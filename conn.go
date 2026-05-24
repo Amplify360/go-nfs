@@ -116,7 +116,7 @@ func (c *conn) serializeWrites(ctx context.Context) {
 func (c *conn) handle(ctx context.Context, w *response) error {
 	handler := c.Server.handlerFor(w.req.Header.Prog, w.req.Header.Proc)
 	if handler == nil {
-		Log.Errorf("No handler for %d.%d", w.req.Header.Prog, w.req.Header.Proc)
+		Log.Debugf("No handler for %d.%d", w.req.Header.Prog, w.req.Header.Proc)
 		if err := w.drain(ctx); err != nil {
 			return err
 		}
