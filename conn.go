@@ -29,6 +29,7 @@ type ResponseCode uint32
 const (
 	ResponseCodeSuccess ResponseCode = iota
 	ResponseCodeProgUnavailable
+	ResponseCodeProgMismatch
 	ResponseCodeProcUnavailable
 	ResponseCodeGarbageArgs
 	ResponseCodeSystemErr
