@@ -10,6 +10,10 @@ import (
 )
 
 func onRemove(ctx context.Context, w *response, userHandle Handler) error {
+	return onRemoveObj(ctx, w, userHandle, false)
+}
+
+func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory bool) error {
 	w.errorFmt = wccDataErrorFormatter
 	obj := DirOpArg{}
 	if err := xdr.Read(w.req.Body, &obj); err != nil {
@@ -45,6 +49,12 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 	preCacheData := ToFileAttribute(dirInfo, fullPath).AsCache()
 
 	toDelete := fs.Join(append(path, string(obj.Filename))...)
+	if directory {
+		toRemoveStat, err := fs.Stat(toDelete)
+		if err == nil && !toRemoveStat.IsDir() {
+			return &NFSStatusError{NFSStatusNotDir, nil}
+		}
+	}
 	toDeleteHandle := userHandle.ToHandle(fs, append(path, string(obj.Filename)))
 
 	err = fs.Remove(toDelete)
