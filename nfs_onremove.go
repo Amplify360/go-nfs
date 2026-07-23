@@ -49,10 +49,34 @@ func onRemoveObj(ctx context.Context, w *response, userHandle Handler, directory
 	preCacheData := ToFileAttribute(dirInfo, fullPath).AsCache()
 
 	toDelete := fs.Join(append(path, string(obj.Filename))...)
+	toRemoveStat, err := fs.Stat(toDelete)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &NFSStatusError{NFSStatusNoEnt, err}
+		}
+		if os.IsPermission(err) {
+			return &NFSStatusError{NFSStatusAccess, err}
+		}
+		return &NFSStatusError{NFSStatusIO, err}
+
+	}
+
+	if directory && !toRemoveStat.IsDir() {
+		return &NFSStatusError{NFSStatusNotDir, nil}
+	} else if !directory && toRemoveStat.IsDir() {
+		return &NFSStatusError{NFSStatusIsDir, nil}
+	}
+
 	if directory {
-		toRemoveStat, err := fs.Stat(toDelete)
-		if err == nil && !toRemoveStat.IsDir() {
-			return &NFSStatusError{NFSStatusNotDir, nil}
+		contents, err := fs.ReadDir(toDelete)
+		if err != nil {
+			if os.IsPermission(err) {
+				return &NFSStatusError{NFSStatusAccess, err}
+			}
+			return &NFSStatusError{NFSStatusIO, err}
+		}
+		if len(contents) > 0 {
+			return &NFSStatusError{NFSStatusNotEmpty, nil}
 		}
 	}
 	toDeleteHandle := userHandle.ToHandle(fs, append(path, string(obj.Filename)))
