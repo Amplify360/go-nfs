@@ -126,7 +126,6 @@ func TestWriteCommitHandlerControlsWriteStability(t *testing.T) {
 	}{
 		{name: "unstable-to-data-sync", requested: WriteUnstable, committed: WriteDataSync},
 		{name: "data-sync-to-file-sync", requested: WriteDataSync, committed: WriteFileSync},
-		{name: "file-sync-to-unstable", requested: WriteFileSync, committed: WriteUnstable},
 	}
 
 	for _, test := range tests {
@@ -189,6 +188,34 @@ func TestWriteCommitHandlerControlsWriteStability(t *testing.T) {
 				t.Fatalf("response verifier = %x, want %x", verifier, serverID)
 			}
 		})
+	}
+}
+
+func TestWriteCommitHandlerCannotReturnWeakerStability(t *testing.T) {
+	filesystem, path := newWriteCommitTestFilesystem(t)
+	handler := &writeCommitTestHandler{
+		fixedHandleTestHandler: &fixedHandleTestHandler{
+			filesystem: filesystem,
+			path:       path,
+		},
+		writeCount:     4,
+		writeStability: WriteUnstable,
+	}
+	requestBody := encodeTestRequest(t, writeArgs{
+		Handle: []byte{1, 2, 3, 4},
+		Count:  4,
+		How:    uint32(WriteFileSync),
+		Data:   []byte("data"),
+	})
+
+	err := onWrite(
+		context.Background(),
+		newTestResponse(requestBody, [8]byte{}),
+		handler,
+	)
+	statusErr, ok := err.(*NFSStatusError)
+	if !ok || statusErr.NFSStatus != NFSStatusServerFault {
+		t.Fatalf("onWrite error = %v, want NFSStatusServerFault", err)
 	}
 }
 
