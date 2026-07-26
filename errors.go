@@ -246,3 +246,11 @@ func statusFromWriteError(err error) NFSStatus {
 	}
 	return NFSStatusIO
 }
+
+func writeStatusError(err error) *NFSStatusError {
+	var statusErr *NFSStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr
+	}
+	return &NFSStatusError{statusFromWriteError(err), err}
+}
