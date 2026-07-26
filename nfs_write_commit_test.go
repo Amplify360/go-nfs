@@ -40,12 +40,44 @@ type commitCall struct {
 	count      uint32
 }
 
+type rawCommitCall struct {
+	handle []byte
+	offset uint64
+	count  uint32
+}
+
 type writeCommitTestHandler struct {
 	*fixedHandleTestHandler
 	writeCalls     []writeCall
 	commitCalls    []commitCall
 	writeCount     int
 	writeStability WriteStability
+}
+
+type rawCommitTestHandler struct {
+	*writeCommitTestHandler
+	handled         bool
+	fromHandleCalls int
+	rawCommitCalls  []rawCommitCall
+}
+
+func (handler *rawCommitTestHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
+	handler.fromHandleCalls++
+	return handler.writeCommitTestHandler.FromHandle(handle)
+}
+
+func (handler *rawCommitTestHandler) CommitHandle(
+	_ context.Context,
+	handle []byte,
+	offset uint64,
+	count uint32,
+) (bool, error) {
+	handler.rawCommitCalls = append(handler.rawCommitCalls, rawCommitCall{
+		handle: append([]byte(nil), handle...),
+		offset: offset,
+		count:  count,
+	})
+	return handler.handled, nil
 }
 
 func (handler *writeCommitTestHandler) Write(
@@ -247,6 +279,65 @@ func TestWriteCommitHandlerReceivesCompleteCommit(t *testing.T) {
 	}
 	if verifier := decodeCommitResponse(t, response); verifier != serverID {
 		t.Fatalf("response verifier = %x, want %x", verifier, serverID)
+	}
+}
+
+func TestRawCommitHandlerCanCommitInvalidatedHandleBeforeResolution(t *testing.T) {
+	filesystem, path := newWriteCommitTestFilesystem(t)
+	handler := &rawCommitTestHandler{
+		writeCommitTestHandler: &writeCommitTestHandler{
+			fixedHandleTestHandler: &fixedHandleTestHandler{
+				filesystem: filesystem,
+				path:       path,
+			},
+		},
+		handled: true,
+	}
+	handle := []byte{1, 3, 5, 7}
+	args := commitArgs{Handle: handle, Offset: 123, Count: 456}
+	response := newTestResponse(encodeTestRequest(t, args), [8]byte{8, 7, 6, 5, 4, 3, 2, 1})
+
+	if err := onCommit(context.Background(), response, handler); err != nil {
+		t.Fatalf("raw onCommit returned error: %v", err)
+	}
+	if handler.fromHandleCalls != 0 {
+		t.Fatalf("raw handled COMMIT resolved invalidated handle %d times", handler.fromHandleCalls)
+	}
+	if len(handler.commitCalls) != 0 || len(handler.rawCommitCalls) != 1 {
+		t.Fatalf("raw calls=%d resolved calls=%d, want 1/0", len(handler.rawCommitCalls), len(handler.commitCalls))
+	}
+	call := handler.rawCommitCalls[0]
+	if !bytes.Equal(call.handle, handle) || call.offset != args.Offset || call.count != args.Count {
+		t.Fatalf("raw COMMIT call=%+v, want handle=%v offset=%d count=%d", call, handle, args.Offset, args.Count)
+	}
+	if verifier := decodeCommitResponse(t, response); verifier != response.Server.ID {
+		t.Fatalf("raw response verifier=%x, want %x", verifier, response.Server.ID)
+	}
+}
+
+func TestRawCommitHandlerFallsBackToResolvedCommit(t *testing.T) {
+	filesystem, path := newWriteCommitTestFilesystem(t)
+	handler := &rawCommitTestHandler{
+		writeCommitTestHandler: &writeCommitTestHandler{
+			fixedHandleTestHandler: &fixedHandleTestHandler{
+				filesystem: filesystem,
+				path:       path,
+			},
+		},
+	}
+	args := commitArgs{Handle: []byte{2, 4, 6, 8}, Offset: 9, Count: 10}
+	response := newTestResponse(encodeTestRequest(t, args), [8]byte{1, 2, 3, 4, 5, 6, 7, 8})
+
+	if err := onCommit(context.Background(), response, handler); err != nil {
+		t.Fatalf("fallback onCommit returned error: %v", err)
+	}
+	if handler.fromHandleCalls != 1 || len(handler.rawCommitCalls) != 1 || len(handler.commitCalls) != 1 {
+		t.Fatalf(
+			"fallback raw=%d resolutions=%d commits=%d, want 1/1/1",
+			len(handler.rawCommitCalls),
+			handler.fromHandleCalls,
+			len(handler.commitCalls),
+		)
 	}
 }
 
