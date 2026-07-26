@@ -11,15 +11,6 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
-// writeStability is the level of durability requested with the write
-type writeStability uint32
-
-const (
-	unstable writeStability = 0
-	dataSync writeStability = 1
-	fileSync writeStability = 2
-)
-
 type writeArgs struct {
 	Handle []byte
 	Offset uint64
@@ -45,7 +36,9 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	if len(req.Data) > math.MaxInt32 || req.Count > math.MaxInt32 {
 		return &NFSStatusError{NFSStatusFBig, os.ErrInvalid}
 	}
-	if req.How != uint32(unstable) && req.How != uint32(dataSync) && req.How != uint32(fileSync) {
+	if req.How != uint32(WriteUnstable) &&
+		req.How != uint32(WriteDataSync) &&
+		req.How != uint32(WriteFileSync) {
 		return &NFSStatusError{NFSStatusInval, os.ErrInvalid}
 	}
 
@@ -63,28 +56,54 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	}
 	preOpCache := ToFileAttribute(info, fullPath).AsCache()
 
-	// now the actual op.
-	file, err := fs.OpenFile(fs.Join(path...), os.O_RDWR, info.Mode().Perm())
-	if err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-	if req.Offset > 0 {
-		if _, err := file.Seek(int64(req.Offset), io.SeekStart); err != nil {
-			return &NFSStatusError{NFSStatusIO, err}
-		}
-	}
 	end := req.Count
 	if len(req.Data) < int(end) {
 		end = uint32(len(req.Data))
 	}
-	writtenCount, err := file.Write(req.Data[:end])
-	if err != nil {
-		Log.Errorf("Error writing: %v", err)
-		return &NFSStatusError{statusFromWriteError(err), err}
-	}
-	if err := file.Close(); err != nil {
-		Log.Errorf("error closing: %v", err)
-		return &NFSStatusError{statusFromWriteError(err), err}
+	data := req.Data[:end]
+	writtenCount := 0
+	committed := WriteFileSync
+	if handler, ok := userHandle.(WriteCommitHandler); ok {
+		writtenCount, committed, err = handler.Write(
+			ctx,
+			fs,
+			path,
+			req.Handle,
+			req.Offset,
+			data,
+			WriteStability(req.How),
+		)
+		if err != nil {
+			Log.Errorf("Error writing: %v", err)
+			return writeStatusError(err)
+		}
+		if writtenCount < 0 || writtenCount > len(data) ||
+			(committed != WriteUnstable &&
+				committed != WriteDataSync &&
+				committed != WriteFileSync) {
+			return &NFSStatusError{NFSStatusServerFault, os.ErrInvalid}
+		}
+	} else {
+		// Preserve the original synchronous behavior unless the handler
+		// explicitly opts into WRITE/COMMIT coordination.
+		file, err := fs.OpenFile(fs.Join(path...), os.O_RDWR, info.Mode().Perm())
+		if err != nil {
+			return &NFSStatusError{NFSStatusAccess, err}
+		}
+		if req.Offset > 0 {
+			if _, err := file.Seek(int64(req.Offset), io.SeekStart); err != nil {
+				return &NFSStatusError{NFSStatusIO, err}
+			}
+		}
+		writtenCount, err = file.Write(data)
+		if err != nil {
+			Log.Errorf("Error writing: %v", err)
+			return &NFSStatusError{statusFromWriteError(err), err}
+		}
+		if err := file.Close(); err != nil {
+			Log.Errorf("error closing: %v", err)
+			return &NFSStatusError{statusFromWriteError(err), err}
+		}
 	}
 
 	writer := bytes.NewBuffer([]byte{})
@@ -98,7 +117,7 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, uint32(writtenCount)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := xdr.Write(writer, fileSync); err != nil {
+	if err := xdr.Write(writer, committed); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 	if err := xdr.Write(writer, w.Server.ID); err != nil {

@@ -33,6 +33,56 @@ type Handler interface {
 	HandleLimit() int
 }
 
+// WriteStability is the durability level requested by an NFSv3 WRITE or
+// reported by its response.
+type WriteStability uint32
+
+const (
+	// WriteUnstable permits the server to acknowledge a write before it has
+	// reached stable storage. The client must issue COMMIT before treating the
+	// data as durable.
+	WriteUnstable WriteStability = iota
+	// WriteDataSync requests that the written data, but not necessarily all
+	// file metadata, reach stable storage before the response.
+	WriteDataSync
+	// WriteFileSync requests that the written data and file metadata reach
+	// stable storage before the response.
+	WriteFileSync
+)
+
+// WriteCommitHandler optionally overrides the default synchronous NFSv3 WRITE
+// and no-op COMMIT implementation. Implementations may retain write state
+// between calls, but must copy any handle, path, or data they retain after the
+// method returns.
+//
+// Write returns the number of bytes accepted and the durability level actually
+// provided. Commit must make the requested byte range stable before returning
+// nil. COMMIT may arrive through a different connection than WRITE, so retained
+// state must not be connection-local.
+//
+// Handlers that do not implement this interface retain the existing behavior:
+// every WRITE opens, writes, and closes the backing file and reports
+// WriteFileSync; COMMIT is a no-op.
+type WriteCommitHandler interface {
+	Write(
+		ctx context.Context,
+		filesystem billy.Filesystem,
+		path []string,
+		handle []byte,
+		offset uint64,
+		data []byte,
+		stability WriteStability,
+	) (written int, committed WriteStability, err error)
+	Commit(
+		ctx context.Context,
+		filesystem billy.Filesystem,
+		path []string,
+		handle []byte,
+		offset uint64,
+		count uint32,
+	) error
+}
+
 // UnixChange extends the billy `Change` interface with support for special files.
 type UnixChange interface {
 	billy.Change

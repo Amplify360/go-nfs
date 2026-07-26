@@ -9,21 +9,32 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
-// onCommit - note this is a no-op, as we always push writes to the backing store.
+type commitArgs struct {
+	Handle []byte
+	Offset uint64
+	Count  uint32
+}
+
+// onCommit is a no-op unless the handler opts into WRITE/COMMIT coordination.
 func onCommit(ctx context.Context, w *response, userHandle Handler) error {
 	w.errorFmt = wccDataErrorFormatter
-	handle, err := xdr.ReadOpaque(w.req.Body)
-	if err != nil {
+	var req commitArgs
+	if err := xdr.Read(w.req.Body, &req); err != nil {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
-	// The conn will drain the unread offset and count arguments.
 
-	fs, path, err := userHandle.FromHandle(handle)
+	fs, path, err := userHandle.FromHandle(req.Handle)
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusServerFault, os.ErrPermission}
+	}
+	if handler, ok := userHandle.(WriteCommitHandler); ok {
+		if err := handler.Commit(ctx, fs, path, req.Handle, req.Offset, req.Count); err != nil {
+			Log.Errorf("Error committing: %v", err)
+			return writeStatusError(err)
+		}
 	}
 
 	writer := bytes.NewBuffer([]byte{})
