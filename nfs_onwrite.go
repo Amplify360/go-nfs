@@ -80,7 +80,8 @@ func onWrite(ctx context.Context, w *response, userHandle Handler) error {
 		if writtenCount < 0 || writtenCount > len(data) ||
 			(committed != WriteUnstable &&
 				committed != WriteDataSync &&
-				committed != WriteFileSync) {
+				committed != WriteFileSync) ||
+			committed < WriteStability(req.How) {
 			return &NFSStatusError{NFSStatusServerFault, os.ErrInvalid}
 		}
 	} else {

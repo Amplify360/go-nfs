@@ -124,9 +124,12 @@ func TestWriteCommitHandlerControlsWriteStability(t *testing.T) {
 		requested WriteStability
 		committed WriteStability
 	}{
+		{name: "unstable-to-unstable", requested: WriteUnstable, committed: WriteUnstable},
 		{name: "unstable-to-data-sync", requested: WriteUnstable, committed: WriteDataSync},
+		{name: "unstable-to-file-sync", requested: WriteUnstable, committed: WriteFileSync},
+		{name: "data-sync-to-data-sync", requested: WriteDataSync, committed: WriteDataSync},
 		{name: "data-sync-to-file-sync", requested: WriteDataSync, committed: WriteFileSync},
-		{name: "file-sync-to-unstable", requested: WriteFileSync, committed: WriteUnstable},
+		{name: "file-sync-to-file-sync", requested: WriteFileSync, committed: WriteFileSync},
 	}
 
 	for _, test := range tests {
@@ -187,6 +190,47 @@ func TestWriteCommitHandlerControlsWriteStability(t *testing.T) {
 			}
 			if verifier != serverID {
 				t.Fatalf("response verifier = %x, want %x", verifier, serverID)
+			}
+		})
+	}
+}
+
+func TestWriteCommitHandlerCannotReturnWeakerStability(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested WriteStability
+		committed WriteStability
+	}{
+		{name: "data-sync-to-unstable", requested: WriteDataSync, committed: WriteUnstable},
+		{name: "file-sync-to-unstable", requested: WriteFileSync, committed: WriteUnstable},
+		{name: "file-sync-to-data-sync", requested: WriteFileSync, committed: WriteDataSync},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			filesystem, path := newWriteCommitTestFilesystem(t)
+			handler := &writeCommitTestHandler{
+				fixedHandleTestHandler: &fixedHandleTestHandler{
+					filesystem: filesystem,
+					path:       path,
+				},
+				writeCount:     4,
+				writeStability: test.committed,
+			}
+			requestBody := encodeTestRequest(t, writeArgs{
+				Handle: []byte{1, 2, 3, 4},
+				Count:  4,
+				How:    uint32(test.requested),
+				Data:   []byte("data"),
+			})
+
+			err := onWrite(
+				context.Background(),
+				newTestResponse(requestBody, [8]byte{}),
+				handler,
+			)
+			statusErr, ok := err.(*NFSStatusError)
+			if !ok || statusErr.NFSStatus != NFSStatusServerFault {
+				t.Fatalf("onWrite error = %v, want NFSStatusServerFault", err)
 			}
 		})
 	}

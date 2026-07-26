@@ -56,9 +56,10 @@ const (
 // method returns.
 //
 // Write returns the number of bytes accepted and the durability level actually
-// provided. Commit must make the requested byte range stable before returning
-// nil. COMMIT may arrive through a different connection than WRITE, so retained
-// state must not be connection-local.
+// provided, which must be at least the requested stability. Commit must make
+// the requested byte range stable before returning nil. COMMIT may arrive
+// through a different connection than WRITE, so retained state must not be
+// connection-local.
 //
 // Handlers that do not implement this interface retain the existing behavior:
 // every WRITE opens, writes, and closes the backing file and reports
