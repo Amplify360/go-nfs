@@ -75,6 +75,12 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 
 	fromLoc := fs.Join(append(fromPath, string(from.Filename))...)
 	toLoc := fs.Join(append(toPath, string(to.Filename))...)
+	var replacedHandle []byte
+	if _, err := fs.Lstat(toLoc); err == nil {
+		replacedHandle = userHandle.ToHandle(fs, append(toPath, string(to.Filename)))
+	} else if !os.IsNotExist(err) {
+		return &NFSStatusError{NFSStatusIO, err}
+	}
 
 	err = fs.Rename(fromLoc, toLoc)
 	if err != nil {
@@ -89,6 +95,11 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 
 	if err := userHandle.InvalidateHandle(fs, oldHandle); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
+	}
+	if replacedHandle != nil && !bytes.Equal(replacedHandle, oldHandle) {
+		if err := userHandle.InvalidateHandle(fs, replacedHandle); err != nil {
+			return &NFSStatusError{NFSStatusServerFault, err}
+		}
 	}
 
 	writer := bytes.NewBuffer([]byte{})
