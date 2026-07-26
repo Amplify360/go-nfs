@@ -23,6 +23,17 @@ func onCommit(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
+	if handler, ok := userHandle.(RawCommitHandler); ok {
+		handled, err := handler.CommitHandle(ctx, req.Handle, req.Offset, req.Count)
+		if err != nil {
+			Log.Errorf("Error committing raw handle: %v", err)
+			return writeStatusError(err)
+		}
+		if handled {
+			return writeCommitResponse(w, nil)
+		}
+	}
+
 	fs, path, err := userHandle.FromHandle(req.Handle)
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
@@ -37,6 +48,10 @@ func onCommit(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	}
 
+	return writeCommitResponse(w, tryStat(fs, path))
+}
+
+func writeCommitResponse(w *response, post *FileAttribute) error {
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return err
@@ -46,7 +61,7 @@ func onCommit(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, uint32(0)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, path)); err != nil {
+	if err := WritePostOpAttrs(writer, post); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 	// write the 8 bytes of write verification.

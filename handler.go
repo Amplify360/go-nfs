@@ -83,6 +83,20 @@ type WriteCommitHandler interface {
 	) error
 }
 
+// RawCommitHandler optionally handles COMMIT before resolving its opaque file
+// handle. This is useful for path-backed handle caches that must invalidate a
+// handle after RENAME or REMOVE but still honor COMMIT for an earlier
+// UNSTABLE WRITE. Returning handled=false preserves the normal FromHandle and
+// WriteCommitHandler path.
+type RawCommitHandler interface {
+	CommitHandle(
+		ctx context.Context,
+		handle []byte,
+		offset uint64,
+		count uint32,
+	) (handled bool, err error)
+}
+
 // UnixChange extends the billy `Change` interface with support for special files.
 type UnixChange interface {
 	billy.Change
