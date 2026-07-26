@@ -256,9 +256,13 @@ func (s *SetFileAttributes) Apply(changer billy.Change, fs billy.Filesystem, fil
 			return err
 		}
 		if *s.SetSize > math.MaxInt64 {
+			if err := fp.Close(); err != nil {
+				return err
+			}
 			return &NFSStatusError{NFSStatusInval, os.ErrInvalid}
 		}
 		if err := fp.Truncate(int64(*s.SetSize)); err != nil {
+			_ = fp.Close()
 			return err
 		}
 		if err := fp.Close(); err != nil {
