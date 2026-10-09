@@ -3,7 +3,6 @@ package nfs
 import (
 	"bytes"
 	"context"
-	"os"
 
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
@@ -22,10 +21,7 @@ func onGetAttr(ctx context.Context, w *response, userHandle Handler) error {
 	fullPath := fs.Join(path...)
 	info, err := fs.Lstat(fullPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return readStatusError(err)
 	}
 	attr := ToFileAttribute(info, fullPath)
 

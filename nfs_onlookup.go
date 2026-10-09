@@ -9,7 +9,7 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 )
 
-func lookupSuccessResponse(handle []byte, entPath, dirPath []string, fs billy.Filesystem) ([]byte, error) {
+func lookupSuccessResponse(handle []byte, entPath, dirPath []string, fs billy.Filesystem, observed ...os.FileInfo) ([]byte, error) {
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return nil, err
@@ -17,7 +17,13 @@ func lookupSuccessResponse(handle []byte, entPath, dirPath []string, fs billy.Fi
 	if err := xdr.Write(writer, handle); err != nil {
 		return nil, err
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, entPath)); err != nil {
+	var attrs *FileAttribute
+	if len(observed) > 0 {
+		attrs = ToFileAttribute(observed[0], fs.Join(entPath...))
+	} else {
+		attrs = tryStat(fs, entPath)
+	}
+	if err := WritePostOpAttrs(writer, attrs); err != nil {
 		return nil, err
 	}
 	if err := WritePostOpAttrs(writer, tryStat(fs, dirPath)); err != nil {
@@ -39,7 +45,10 @@ func onLookup(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 	dirInfo, err := fs.Lstat(fs.Join(p...))
-	if err != nil || !dirInfo.IsDir() {
+	if err != nil {
+		return readStatusError(err)
+	}
+	if !dirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, err}
 	}
 
@@ -71,12 +80,13 @@ func onLookup(ctx context.Context, w *response, userHandle Handler) error {
 	}
 
 	reqPath := append(p, string(obj.Filename))
-	if _, err = fs.Lstat(fs.Join(reqPath...)); err != nil {
-		return &NFSStatusError{NFSStatusNoEnt, os.ErrNotExist}
+	info, err := fs.Lstat(fs.Join(reqPath...))
+	if err != nil {
+		return readStatusError(err)
 	}
 
 	newHandle := userHandle.ToHandle(fs, reqPath)
-	resp, err := lookupSuccessResponse(newHandle, reqPath, p, fs)
+	resp, err := lookupSuccessResponse(newHandle, reqPath, p, fs, info)
 	if err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}

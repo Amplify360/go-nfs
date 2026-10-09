@@ -188,7 +188,14 @@ func (s *NFSStatusError) Code() ResponseCode {
 // MarshalBinary - The binary form of the code.
 func (s *NFSStatusError) MarshalBinary() (data []byte, err error) {
 	var resp [4]byte
-	binary.BigEndian.PutUint32(resp[0:4], uint32(s.NFSStatus))
+	status := s.NFSStatus
+	// Filesystems may refuse a mutation temporarily. Preserve the protocol's
+	// retryable status rather than turning a wrapped EAGAIN into a hard I/O
+	// or permission failure. Explicit statuses such as ROFS stay authoritative.
+	if (status == NFSStatusIO || status == NFSStatusAccess) && errors.Is(s.WrappedErr, syscall.EAGAIN) {
+		status = NFSStatusJukebox
+	}
+	binary.BigEndian.PutUint32(resp[0:4], uint32(status))
 	return resp[:], nil
 }
 

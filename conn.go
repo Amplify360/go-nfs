@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 
+	"github.com/go-git/go-billy/v5"
+
 	xdr2 "github.com/rasky/go-xdr/xdr2"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
@@ -40,6 +42,50 @@ type conn struct {
 	*Server
 	writeSerializer chan []byte
 	net.Conn
+}
+
+// The request context bounds filesystem work, not sending the final error
+// response. Keep the connection context live after the work budget expires.
+type requestContextHandler struct {
+	Handler
+	ctx context.Context
+}
+
+type cachingRequestContextHandler struct {
+	requestContextHandler
+	CachingHandler
+}
+
+func boundRequestContextHandler(handler Handler, ctx context.Context) Handler {
+	bound := requestContextHandler{Handler: handler, ctx: ctx}
+	if caching, ok := handler.(CachingHandler); ok {
+		return cachingRequestContextHandler{requestContextHandler: bound, CachingHandler: caching}
+	}
+	return bound
+}
+
+func readOnlyProcedure(procedure uint32) bool {
+	switch NFSProcedure(procedure) {
+	case NFSProcedureGetAttr, NFSProcedureLookup, NFSProcedureAccess,
+		NFSProcedureReadlink, NFSProcedureRead, NFSProcedureReadDir,
+		NFSProcedureReadDirPlus, NFSProcedureFSStat, NFSProcedureFSInfo,
+		NFSProcedurePathConf:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h requestContextHandler) FromHandle(handle []byte) (billy.Filesystem, []string, error) {
+	filesystem, path, err := h.Handler.FromHandle(handle)
+	if err == nil {
+		if scoped, ok := filesystem.(interface {
+			WithRequestContext(context.Context) billy.Filesystem
+		}); ok {
+			filesystem = scoped.WithRequestContext(h.ctx)
+		}
+	}
+	return filesystem, path, err
 }
 
 func (c *conn) serve(ctx context.Context) {
@@ -122,7 +168,16 @@ func (c *conn) handle(ctx context.Context, w *response) error {
 		}
 		return c.err(ctx, w, &ResponseCodeProcUnavailableError{})
 	}
-	appError := handler(ctx, w, c.Server.Handler)
+	operationContext, inputHandler := ctx, c.Server.Handler
+	if w.req.Header.Prog == nfsServiceID && readOnlyProcedure(w.req.Header.Proc) {
+		if budget, ok := inputHandler.(ReadRequestContextHandler); ok {
+			var cancel context.CancelFunc
+			operationContext, cancel = budget.ReadRequestContext(ctx)
+			defer cancel()
+		}
+		inputHandler = boundRequestContextHandler(inputHandler, operationContext)
+	}
+	appError := handler(operationContext, w, inputHandler)
 	if drainErr := w.drain(ctx); drainErr != nil {
 		return drainErr
 	}

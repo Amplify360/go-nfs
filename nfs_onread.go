@@ -39,10 +39,7 @@ func onRead(ctx context.Context, w *response, userHandle Handler) error {
 
 	fh, err := fs.Open(fs.Join(path...))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		return &NFSStatusError{NFSStatusAccess, err}
+		return readStatusError(err)
 	}
 	defer fh.Close()
 
@@ -50,9 +47,19 @@ func onRead(ctx context.Context, w *response, userHandle Handler) error {
 	setEOF := false
 
 	fullPath := fs.Join(path...)
-	info, err := fs.Stat(fullPath)
+	// Optional per-open metadata keeps version-pinned bytes and attributes
+	// aligned. No metadata cache survives this READ RPC.
+	var info os.FileInfo
+	if captured, ok := fh.(interface{ ReadMetadata() (os.FileInfo, error) }); ok {
+		info, err = captured.ReadMetadata()
+	} else {
+		info, err = fs.Stat(fullPath)
+	}
 	if err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
+		return readStatusError(err)
+	}
+	if info == nil {
+		return &NFSStatusError{NFSStatusServerFault, errors.New("missing read metadata")}
 	}
 	if int64(obj.Offset) >= info.Size() {
 		obj.Count = 0
@@ -68,7 +75,7 @@ func onRead(ctx context.Context, w *response, userHandle Handler) error {
 	// todo: multiple reads if size isn't full
 	cnt, err := fh.ReadAt(resp.Data, int64(obj.Offset))
 	if err != nil && !errors.Is(err, io.EOF) {
-		return &NFSStatusError{NFSStatusIO, err}
+		return readStatusError(err)
 	}
 	resp.Count = uint32(cnt)
 	resp.Data = resp.Data[:resp.Count]

@@ -33,6 +33,15 @@ type Handler interface {
 	HandleLimit() int
 }
 
+// ReadRequestContextHandler optionally supplies one work budget for an entire
+// read-only NFS request. The handler owns deadline policy; the protocol library
+// does not select a timeout. Mutations and COMMIT retain their existing context.
+// The returned cancel function must be non-nil. Filesystems can opt into this
+// context by implementing WithRequestContext(context.Context) billy.Filesystem.
+type ReadRequestContextHandler interface {
+	ReadRequestContext(context.Context) (context.Context, context.CancelFunc)
+}
+
 // WriteStability is the durability level requested by an NFSv3 WRITE or
 // reported by its response.
 type WriteStability uint32

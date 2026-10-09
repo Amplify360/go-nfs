@@ -126,6 +126,11 @@ func ToFileAttribute(info os.FileInfo, filePath string) *FileAttribute {
 	f.Atime = ToNFSTime(info.ModTime())
 	f.Mtime = f.Atime
 	f.Ctime = f.Atime
+	// Generic optional change-time metadata. Filesystems without this surface
+	// retain the existing conversion; storage/version policy stays outside NFS.
+	if changed, ok := info.(interface{ ChangeTime() time.Time }); ok {
+		f.Ctime = ToNFSTime(changed.ChangeTime())
+	}
 	return &f
 }
 
@@ -206,7 +211,7 @@ func (s *SetFileAttributes) Apply(changer billy.Change, fs billy.Filesystem, fil
 	} else if errors.Is(err, os.ErrPermission) {
 		return &NFSStatusError{NFSStatusAccess, os.ErrPermission}
 	} else if err != nil {
-		return nil
+		return err
 	}
 	curr := ToFileAttribute(curOS, file)
 
@@ -249,20 +254,40 @@ func (s *SetFileAttributes) Apply(changer billy.Change, fs billy.Filesystem, fil
 		if curr.Mode()&os.ModeSymlink != 0 {
 			return &NFSStatusError{NFSStatusNotSupp, os.ErrInvalid}
 		}
-		fp, err := fs.OpenFile(file, os.O_WRONLY|os.O_EXCL, 0)
-		if errors.Is(err, os.ErrPermission) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		} else if err != nil {
-			return err
-		}
 		if *s.SetSize > math.MaxInt64 {
 			return &NFSStatusError{NFSStatusInval, os.ErrInvalid}
 		}
-		if err := fp.Truncate(int64(*s.SetSize)); err != nil {
-			return err
-		}
-		if err := fp.Close(); err != nil {
-			return err
+		if setter, ok := fs.(interface{ SetFileSize(string, int64) error }); ok {
+			if err := setter.SetFileSize(file, int64(*s.SetSize)); err != nil {
+				var status *NFSStatusError
+				if errors.As(err, &status) {
+					return err
+				}
+				// Optional filesystem errors must remain NFS errors, not RPC
+				// SYSTEM_ERR. The existing generic mapper preserves EAGAIN as
+				// the retryable JUKEBOX status without any sidecar policy here.
+				return &NFSStatusError{NFSStatusIO, err}
+			}
+		} else {
+			fp, err := fs.OpenFile(file, os.O_WRONLY|os.O_EXCL, 0)
+			if errors.Is(err, os.ErrPermission) {
+				return &NFSStatusError{NFSStatusAccess, err}
+			} else if err != nil {
+				return err
+			}
+			closed := false
+			defer func() {
+				if !closed {
+					_ = fp.Close()
+				}
+			}()
+			if err := fp.Truncate(int64(*s.SetSize)); err != nil {
+				return err
+			}
+			closed = true
+			if err := fp.Close(); err != nil {
+				return err
+			}
 		}
 	}
 

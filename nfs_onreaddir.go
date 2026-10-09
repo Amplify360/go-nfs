@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"io"
 	"io/fs"
-	"os"
 	"path"
 	"sort"
 
@@ -155,10 +154,7 @@ func getDirListingWithVerifier(userHandle Handler, fsHandle []byte, verifier uin
 	// load the entries.
 	contents, err := fs.ReadDir(path)
 	if err != nil {
-		if os.IsPermission(err) {
-			return nil, 0, &NFSStatusError{NFSStatusAccess, err}
-		}
-		return nil, 0, &NFSStatusError{NFSStatusNotDir, err}
+		return nil, 0, readStatusError(err)
 	}
 
 	sort.Slice(contents, func(i, j int) bool {

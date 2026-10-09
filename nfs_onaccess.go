@@ -3,6 +3,8 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
@@ -27,7 +29,18 @@ func onAccess(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, path)); err != nil {
+	info, err := fs.Stat(fs.Join(path...))
+	if err != nil {
+		var status *NFSStatusError
+		if errors.As(err, &status) {
+			return status
+		}
+		if os.IsNotExist(err) {
+			return &NFSStatusError{NFSStatusNoEnt, err}
+		}
+		return &NFSStatusError{NFSStatusIO, err}
+	}
+	if err := WritePostOpAttrs(writer, ToFileAttribute(info, fs.Join(path...))); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 
