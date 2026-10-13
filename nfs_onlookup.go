@@ -3,6 +3,7 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v5"
@@ -10,6 +11,9 @@ import (
 )
 
 func lookupSuccessResponse(handle []byte, entPath, dirPath []string, fs billy.Filesystem, observed ...os.FileInfo) ([]byte, error) {
+	if len(handle) == 0 {
+		return nil, errors.New("NFS LOOKUP handle creation failed")
+	}
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return nil, err
@@ -86,6 +90,14 @@ func onLookup(ctx context.Context, w *response, userHandle Handler) error {
 	}
 
 	newHandle := userHandle.ToHandle(fs, reqPath)
+	boundFS, boundPath, err := userHandle.FromHandle(newHandle)
+	if err != nil {
+		return readStatusError(err)
+	}
+	info, err = boundFS.Lstat(boundFS.Join(boundPath...))
+	if err != nil {
+		return readStatusError(err)
+	}
 	resp, err := lookupSuccessResponse(newHandle, reqPath, p, fs, info)
 	if err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
